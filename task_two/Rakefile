@@ -1,0 +1,43 @@
+require 'pg'
+
+task :add_apple_to_basket, [:variety, :count] do |t, args|
+  def db_connection
+    begin
+      connection = PG.connect(dbname: "comcast_baskets")
+      yield(connection)
+    ensure
+      connection.close
+    end
+  end
+  open_baskets= nil
+  left_over_apples_count= 0
+  overall_apples_count= nil
+  basket_apples_count= nil
+
+  args[:count].to_i.times do
+    db_connection do |conn|
+      open_baskets= conn.exec("SELECT * FROM baskets WHERE
+        (baskets.id IN (SELECT DISTINCT apples.basket_id FROM apples WHERE apples.variety = '#{args[:variety]}')
+        AND baskets.fill_rate != '100.0%') OR baskets.fill_rate = '0%' ORDER BY baskets.id")
+    end
+    if open_baskets.to_a.count == 0
+      left_over_apples_count += 1
+    else
+      first_open_basket= open_baskets.to_a.first
+      db_connection do |conn|
+        overall_apples_count= conn.exec("SELECT count(*) FROM apples").to_a.first["count"].to_i
+        basket_apples_count= conn.exec("SELECT count(*) FROM apples WHERE apples.basket_id= #{first_open_basket["id"]}").to_a.first["count"]
+        conn.exec(
+          "INSERT INTO apples (id, basket_id, variety, created_at, updated_at)
+          VALUES (#{overall_apples_count + 1}, #{first_open_basket["id"]}, '#{args[:variety]}', NOW(), NOW())"
+        )
+        conn.exec(
+          "UPDATE baskets SET fill_rate = '#{(basket_apples_count.to_f + 1)/first_open_basket["capacity"].to_f*100}%', updated_at = NOW() WHERE id = #{first_open_basket["id"]}"
+        )
+      end
+    end
+  end
+  if left_over_apples_count >0
+    puts "All baskets are full. We couldn't find a place for #{left_over_apples_count} apples"
+  end
+end
